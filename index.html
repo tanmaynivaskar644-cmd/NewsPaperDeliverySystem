@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Route Partner Pro</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <style>
+        body, html { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; }
+        #map { height: 100%; width: 100%; z-index: 1; }
+        
+        /* Custom UI Layers */
+        .ui-layer { z-index: 2000; }
+        
+        .number-marker {
+            background: #ef4444; color: white; border-radius: 50%; border: 2px solid white;
+            font-weight: bold; display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.4); transition: background 0.3s;
+        }
+        .number-marker.delivered { background: #22c55e; }
+        .gps-marker { background: #3b82f6; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.4); }
+        
+        /* Custom scrollbar handling for top menu list */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+    </style>
+</head>
+<body class="bg-gray-100 font-sans flex flex-col h-screen justify-between select-none relative">
+
+    <div class="fixed top-0 inset-x-0 ui-layer flex flex-col shadow-md">
+        <header class="bg-slate-900 text-white p-3 flex justify-between items-center z-10">
+            <div>
+                <h1 class="text-base font-bold tracking-wide">📦 Route Partner</h1>
+                <span id="day-badge" class="bg-slate-700 text-[10px] px-2 py-0.5 rounded-full font-semibold">Loading...</span>
+            </div>
+            <div class="flex gap-2">
+                <button onclick="toggleTopPanel()" class="bg-slate-700 hover:bg-slate-600 text-xs px-2.5 py-1.5 rounded font-medium">
+                    📋 <span id="toggle-text">Show List</span>
+                </button>
+                <button onclick="toggleAdminPanel()" class="bg-blue-600 hover:bg-blue-700 text-xs px-2.5 py-1.5 rounded font-medium shadow">
+                    ⚙️ Setup
+                </button>
+            </div>
+        </header>
+
+        <div id="top-list-panel" class="bg-slate-800 text-white max-h-0 overflow-y-auto transition-all duration-300 ease-in-out no-scrollbar">
+            <div id="vertical-route-list" class="p-3 space-y-2 text-sm divide-y divide-slate-700">
+                </div>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <div class="fixed bottom-0 inset-x-0 bg-white p-4 shadow-[0_-10px_25px_-5px_rgba(0,0,0,0.15)] border-t border-gray-200 ui-layer flex flex-col justify-between h-[155px]">
+        <div class="flex justify-between items-start gap-4 grow">
+            <div class="truncate grow">
+                <div class="flex items-center gap-2">
+                    <span id="progress-badge" class="text-[10px] font-bold bg-blue-100 text-blue-700 px-2 py-0.5 rounded">Stop #1</span>
+                    <span id="progress-text" class="text-xs text-gray-400 font-medium">(0 / 0 Done)</span>
+                </div>
+                <h2 id="current-stop-title" class="text-base font-bold text-gray-800 truncate mt-1">Loading...</h2>
+                <p id="current-stop-paper" class="text-sm font-semibold text-blue-600 truncate mt-0.5">Papers: None</p>
+            </div>
+            
+            <div class="flex items-center justify-center pt-2 px-1">
+                <label class="relative flex items-center justify-center p-3 rounded-xl bg-gray-50 border-2 border-gray-200 active:scale-95 transition-transform cursor-pointer">
+                    <input type="checkbox" id="delivery-checkbox" class="w-7 h-7 rounded border-gray-300 text-blue-600 focus:ring-blue-500 accent-blue-600 scale-125">
+                </label>
+            </div>
+        </div>
+
+        <div id="current-stop-notes-container" class="bg-amber-50 border-l-4 border-amber-400 p-1.5 rounded text-xs text-amber-900 mt-2 hidden truncate">
+            <strong>💡 Note:</strong> <span id="current-stop-notes"></span>
+        </div>
+    </div>
+
+    <div id="admin-panel" class="fixed inset-0 bg-black/50 z-[3000] hidden flex items-center justify-center p-4">
+        <div class="bg-white w-full max-w-md rounded-xl shadow-2xl flex flex-col max-h-[85vh]">
+            <div class="p-4 border-b border-gray-100 flex justify-between items-center bg-slate-50 rounded-t-xl">
+                <h3 class="font-bold text-gray-800">Route Settings Manager</h3>
+                <button onclick="toggleAdminPanel()" class="text-gray-400 text-xl font-bold px-2">&times;</button>
+            </div>
+            
+            <div class="p-4 overflow-y-auto space-y-4 grow">
+                <div>
+                    <label class="block text-xs font-bold text-gray-600 uppercase mb-1">Select Route Day</label>
+                    <select id="admin-day-select" onchange="loadAdminDay()" class="w-full p-2 border border-gray-300 rounded-lg text-sm bg-white"></select>
+                </div>
+                <hr class="border-gray-100">
+                <div class="space-y-3">
+                    <h4 class="text-xs font-bold text-blue-600 uppercase tracking-wider">➕ Add Address Marker</h4>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-0.5">Google Maps URL Link</label>
+                        <input type="text" id="form-location" placeholder="Paste link shared from Google Maps App" class="w-full p-2 border border-gray-300 rounded-lg text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-0.5">Apartment Details / Name</label>
+                        <input type="text" id="form-name" placeholder="e.g., Smith - Apt 302" class="w-full p-2 border border-gray-300 rounded-lg text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-0.5">Papers (Use commas if multiple papers)</label>
+                        <input type="text" id="form-papers" placeholder="e.g., Local Press, Daily Mail" class="w-full p-2 border border-gray-300 rounded-lg text-sm">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-medium text-gray-500 mb-0.5">Route Note (Optional)</label>
+                        <input type="text" id="form-notes" placeholder="e.g., Drop under the green canopy box" class="w-full p-2 border border-gray-300 rounded-lg text-sm">
+                    </div>
+                    <button onclick="addStopFromForm()" class="w-full bg-blue-600 text-white p-2 rounded-lg text-sm font-bold hover:bg-blue-700">Save Destination</button>
+                </div>
+                <hr class="border-gray-100">
+                <button onclick="clearCurrentDayRoute()" class="w-full bg-red-50 text-red-600 p-2 rounded-lg text-xs font-bold border border-red-200">🗑️ Wipe Route Data Clear</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ==========================================
+        // LOCAL ENGINE INFRASTRUCTURE MANAGEMENT
+        // ==========================================
+        const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+        let currentDay = days[new Date().getDay()];
+        if (currentDay === "Sunday") currentDay = "Monday"; // Sunday default fallback loop pointer
+        document.getElementById('day-badge').innerText = currentDay + " Shift";
+
+        if (!localStorage.getItem('deliverySchedule')) {
+            localStorage.setItem('deliverySchedule', JSON.stringify({ "Monday": [], "Tuesday": [], "Wednesday": [], "Thursday": [], "Friday": [], "Saturday": [] }));
+        }
+
+        let schedule = JSON.parse(localStorage.getItem('deliverySchedule'));
+        let activeRoute = schedule[currentDay] || [];
+        let totalStops = activeRoute.length;
+        let currentProgressIndex = 0; // Tracks which index house we are currently delivering to
+
+        // Populate Day Selector Menu Items
+        const adminSelect = document.getElementById('admin-day-select');
+        days.forEach(d => { if(d !== "Sunday") { let opt = document.createElement('option'); opt.value = d; opt.innerText = d; if(d === currentDay) opt.selected = true; adminSelect.appendChild(opt); } });
+
+        // Map Setup Config
+        const defaultCenter = totalStops > 0 ? [activeRoute[0].lat, activeRoute[0].lng] : [48.7758, 9.1829];
+        const map = L.map('map', { zoomControl: false }).setView(defaultCenter, 15);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+        L.control.zoom({ position: 'topright' }).addTo(map);
+
+        let markersArray = [];
+        let userLocationMarker = null;
+
+        function renderRouteMarkers() {
+            markersArray.forEach(m => map.removeLayer(m));
+            markersArray = [];
+
+            activeRoute.forEach((stop, index) => {
+                const stopNumber = index + 1;
+                const customIcon = L.divIcon({
+                    className: `number-marker marker-stop-${stopNumber}`,
+                    html: `<span>${stopNumber}</span>`,
+                    iconSize: [30, 30], iconAnchor: [15, 15]
+                });
+
+                const marker = L.marker([stop.lat, stop.lng], { icon: customIcon }).addTo(map);
+                marker.bindPopup(`<div class="text-xs"><b>#${stopNumber}: ${stop.name}</b><br><span class="text-blue-600 font-bold">${stop.paper}</span></div>`);
+                markersArray.push(marker);
+            });
+        }
+
+        // Live Geolocation Tracking Dot Loop Setup
+        if ("geolocation" in navigator) {
+            navigator.geolocation.watchPosition((pos) => {
+                const { latitude, longitude } = pos.coords;
+                if (!userLocationMarker) {
+                    userLocationMarker = L.marker([latitude, longitude], { icon: L.divIcon({ className: 'gps-marker', iconSize: [14, 14] }) }).addTo(map);
+                } else { userLocationMarker.setLatLng([latitude, longitude]); }
+            }, (err) => console.log(err), { enableHighAccuracy: true });
+        }
+
+        // ==========================================
+        // RUNTIME CORE SYSTEM INTERACTION INTERACTION
+        // ==========================================
+        const checkbox = document.getElementById('delivery-checkbox');
+        const stopTitle = document.getElementById('current-stop-title');
+        const stopPaper = document.getElementById('current-stop-paper');
+        const progressBadge = document.getElementById('progress-badge');
+        const progressText = document.getElementById('progress-text');
+        const notesContainer = document.getElementById('current-stop-notes-container');
+        const notesText = document.getElementById('current-stop-notes');
+        const listContainer = document.getElementById('vertical-route-list');
+
+        checkbox.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                // Flash checkbox animation feedback momentarily before advancing forward
+                setTimeout(() => {
+                    currentProgressIndex++;
+                    checkbox.checked = false;
+                    updateAppUI();
+                }, 200);
+            }
+        });
+
+        function updateAppUI() {
+            progressText.innerText = `(${currentProgressIndex} / ${totalStops} Done)`;
+            
+            // 1. Update Map pin structural colors context variables
+            activeRoute.forEach((_, idx) => {
+                const num = idx + 1;
+                const el = document.querySelector(`.marker-stop-${num}`);
+                if (el) {
+                    if (num <= currentProgressIndex) { el.classList.add('delivered'); } 
+                    else { el.classList.remove('delivered'); }
+                }
+            });
+
+            // 2. Render Top List Drawer Contents layout grouping variables
+            listContainer.innerHTML = "";
+            activeRoute.forEach((stop, index) => {
+                const stopNumber = index + 1;
+                let itemStatusClass = "text-slate-300"; // Default future upcoming rows view
+                let statusBadge = `<span class="bg-slate-700 text-[10px] px-1.5 py-0.5 rounded font-bold">${stopNumber}</span>`;
+                
+                if (stopNumber <= currentProgressIndex) {
+                    itemStatusClass = "text-slate-500 line-through opacity-50 bg-slate-900/20";
+                    statusBadge = `<span>✅</span>`;
+                } else if (index === currentProgressIndex) {
+                    itemStatusClass = "bg-blue-900/40 text-blue-200 border-l-4 border-blue-500 font-semibold p-1.5 rounded";
+                    statusBadge = `<span class="bg-blue-600 text-white text-[10px] px-1.5 py-0.5 rounded font-bold animate-pulse">${stopNumber}</span>`;
+                }
+
+                const row = document.createElement('div');
+                row.className = `flex items-start justify-between py-2 px-1 text-xs ${itemStatusClass}`;
+                row.innerHTML = `
+                    <div class="flex items-start gap-2.5 truncate max-w-[75%]">
+                        ${statusBadge}
+                        <div class="truncate">
+                            <p class="font-medium truncate">${stop.name}</p>
+                            <p class="text-[11px] text-slate-400 truncate mt-0.5">📄 ${stop.paper}</p>
+                        </div>
+                    </div>
+                    ${stop.notes ? `<span class="text-[10px] text-amber-300 italic truncate max-w-[20%]">💡 ${stop.notes}</span>` : ''}
+                `;
+                listContainer.appendChild(row);
+            });
+
+            // 3. Process primary Active target bottom window layout frame details 
+            if (currentProgressIndex < totalStops) {
+                const activeStop = activeRoute[currentProgressIndex];
+                progressBadge.innerText = `Stop #${currentProgressIndex + 1}`;
+                stopTitle.innerText = activeStop.name;
+                stopPaper.innerText = `📋 Papers: ${activeStop.paper}`;
+                
+                if (activeStop.notes && activeStop.notes.trim() !== "") {
+                    notesContainer.classList.remove('hidden');
+                    notesText.innerText = activeStop.notes;
+                } else { notesContainer.classList.add('hidden'); }
+                
+                map.panTo([activeStop.lat, activeStop.lng]);
+                checkbox.disabled = false;
+            } else {
+                progressBadge.innerText = "FINISH";
+                stopTitle.innerText = totalStops > 0 ? "🎉 Shift Complete!" : "No stops added yet.";
+                stopPaper.innerText = "Enjoy your rest break!";
+                notesContainer.classList.add('hidden');
+                checkbox.disabled = true;
+            }
+        }
+
+        // ==========================================
+        // GUI NAVIGATION DRAWER MANAGEMENT PANEL
+        // ==========================================
+        function toggleTopPanel() {
+            const tray = document.getElementById('top-list-panel');
+            const txt = document.getElementById('toggle-text');
+            if (tray.style.maxHeight === "0px" || !tray.style.maxHeight) {
+                tray.style.maxHeight = "40vh"; txt.innerText = "Hide List";
+            } else { tray.style.maxHeight = "0px"; txt.innerText = "Show List"; }
+        }
+
+        function toggleAdminPanel() { document.getElementById('admin-panel').classList.toggle('hidden'); }
+
+        function loadAdminDay() {
+            const targetDay = adminSelect.value;
+            schedule = JSON.parse(localStorage.getItem('deliverySchedule'));
+            activeRoute = schedule[targetDay] || [];
+            totalStops = activeRoute.length;
+            currentProgressIndex = 0;
+            document.getElementById('day-badge').innerText = targetDay + " Shift";
+            renderRouteMarkers();
+            updateAppUI();
+        }
+
+        function extractCoords(input) {
+            const coordRegex = /@?(-?\d+\.\d+),(-?\d+\.\d+)/;
+            const match = input.match(coordRegex);
+            if (match) return { lat: parseFloat(match[1]), lng: parseFloat(match[2]) };
+            const simpleSplit = input.split(',');
+            if(simpleSplit.length === 2) {
+                const lat = parseFloat(simpleSplit[0]), lng = parseFloat(simpleSplit[1]);
+                if(!isNaN(lat) && !isNaN(lng)) return { lat, lng };
+            }
+            return null;
+        }
+
+        function addStopFromForm() {
+            const dayToEdit = adminSelect.value;
+            const locInp = document.getElementById('form-location').value.trim();
+            const nameInp = document.getElementById('form-name').value.trim();
+            const papersInp = document.getElementById('form-papers').value.trim();
+            const notesInp = document.getElementById('form-notes').value.trim();
+
+            if (!locInp || !nameInp || !papersInp) { alert("Please complete required entries."); return; }
+            const coords = extractCoords(locInp);
+            if (!coords) { alert("Invalid location string pattern. Paste a full clean Google Maps Link."); return; }
+
+            schedule[dayToEdit].push({ id: Date.now(), name: nameInp, lat: coords.lat, lng: coords.lng, paper: papersInp, notes: notesInp });
+            localStorage.setItem('deliverySchedule', JSON.stringify(schedule));
+            
+            document.getElementById('form-location').value = ""; document.getElementById('form-name').value = "";
+            document.getElementById('form-papers').value = ""; document.getElementById('form-notes').value = "";
+            alert("Location appended successfully!");
+            loadAdminDay();
+        }
+
+        function clearCurrentDayRoute() {
+            const dayToEdit = adminSelect.value;
+            if(confirm(`Wipe out all stored entry sequences for ${dayToEdit}?`)) {
+                schedule[dayToEdit] = []; localStorage.setItem('deliverySchedule', JSON.stringify(schedule));
+                loadAdminDay();
+            }
+        }
+
+        // Bootstrap Runtime Initialization Sequences
+        renderRouteMarkers();
+        updateAppUI();
+    </script>
+</body>
+</html>
