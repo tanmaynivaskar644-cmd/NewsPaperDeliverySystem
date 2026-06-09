@@ -16,12 +16,22 @@
         body, html { margin: 0; padding: 0; height: 100%; width: 100%; overflow: hidden; }
         #map { height: 100%; width: 100%; z-index: 1; }
         .ui-layer { z-index: 2000; }
+        
         .number-marker {
             background: #ef4444; color: white; border-radius: 50%; border: 2px solid white;
             font-weight: bold; display: flex; align-items: center; justify-content: center;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.4); transition: background 0.3s;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.4); transition: background 0.3s, transform 0.2s;
         }
         .number-marker.delivered { background: #22c55e; }
+        
+        /* Pulse styling to show you can drag it */
+        .number-marker.editable-pin {
+            border: 2px dashed #ffffff;
+            box-shadow: 0 0 0 6px rgba(239, 68, 68, 0.4);
+            transform: scale(1.15);
+            cursor: move;
+        }
+        
         .gps-marker { background: #3b82f6; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.4); }
         .no-scrollbar::-webkit-scrollbar { display: none; }
         .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
@@ -30,6 +40,14 @@
 <body class="bg-gray-100 font-sans flex flex-col h-screen justify-between select-none relative">
 
     <div class="fixed top-0 inset-x-0 ui-layer flex flex-col shadow-md">
+        <div id="edit-banner" class="bg-amber-500 text-slate-900 text-xs font-bold text-center py-1.5 hidden px-4 flex justify-between items-center transition-all duration-200">
+            <span>🛠️ Edit Mode Active (Drag numbers to true locations)</span>
+            <div class="flex gap-2">
+                <button onclick="saveDraggedPositions()" class="bg-slate-900 text-white px-2 py-0.5 rounded shadow">💾 Save</button>
+                <button onclick="cancelEditMode()" class="bg-white/40 text-slate-900 px-2 py-0.5 rounded">Cancel</button>
+            </div>
+        </div>
+
         <header class="bg-slate-900 text-white p-3 flex justify-between items-center z-10">
             <div>
                 <h1 class="text-base font-bold tracking-wide">📦 Route Partner</h1>
@@ -88,6 +106,15 @@
                     <label class="block text-xs font-bold text-gray-600 uppercase mb-1">Select Route Day</label>
                     <select id="admin-day-select" onchange="loadAdminDay()" class="w-full p-2 border border-gray-300 rounded-lg text-sm bg-white"></select>
                 </div>
+                
+                <div class="bg-blue-50 border border-blue-200 rounded-xl p-3 flex flex-col gap-2">
+                    <span class="text-xs font-semibold text-blue-900">📍 Visual Pin Position Adjustment</span>
+                    <p class="text-[11px] text-blue-700">Turn on edit mode to manually drag existing placeholder dots to their true house locations right on the map surface.</p>
+                    <button onclick="activateMarkerEditMode()" class="bg-blue-600 text-white font-bold p-2 text-xs rounded-lg shadow hover:bg-blue-700">
+                        ✏️ Edit Marker Locations On Map
+                    </button>
+                </div>
+
                 <hr class="border-gray-100">
                 <div class="space-y-3">
                     <h4 class="text-xs font-bold text-blue-600 uppercase tracking-wider">➕ Add Address</h4>
@@ -105,7 +132,7 @@
 
     <script>
         // ==========================================
-        // CONNECTED TO YOUR INJECTED DATABASE CREDENTIALS
+        // CONNECTED TO YOUR DATABASE CREDENTIALS
         // ==========================================
         const SUPABASE_URL = "https://purzrbbosvjirmdufjay.supabase.co"; 
         const SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB1cnpyYmJvc3ZqaXJtZHVmamF5Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODEwMzgzNTAsImV4cCI6MjA5NjYxNDM1MH0.3KWVtU_rVfZHHUVL9DfjvquZqjzhaAdO00kJ2vlhuk4";
@@ -119,20 +146,22 @@
         let activeRoute = [];
         let totalStops = 0;
         let currentProgressIndex = 0;
+        
+        // Drag configuration properties
+        let isEditMode = false;
+        let editedPositionsMap = {}; // Temporarily tracks modified locations before saving: { stopId: {lat, lng} }
 
-        // Populate Day Dropdowns
         const adminSelect = document.getElementById('admin-day-select');
         days.forEach(d => { if(d !== "Sunday") { let opt = document.createElement('option'); opt.value = d; opt.innerText = d; if(d === currentDay) opt.selected = true; adminSelect.appendChild(opt); } });
 
-        // Leaflet Engine Configuration
-        const map = L.map('map', { zoomControl: false }).setView([48.7758, 9.1829], 14);
+        // Leaflet Configuration Reverted Back to Classic OpenStreetMap Tile Sets
+        const map = L.map('map', { zoomControl: false }).setView([48.7475, 9.1025], 14);
         L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
         L.control.zoom({ position: 'topright' }).addTo(map);
 
         let markersArray = [];
         let userLocationMarker = null;
 
-        // Fetch Live Shift Data Array from Database
         async function fetchRouteData() {
             const { data, error } = await _supabase
                 .from('delivery_schedule')
@@ -145,14 +174,13 @@
             activeRoute = data || [];
             totalStops = activeRoute.length;
             
-            // Auto calculate current stop pointer position based on remaining unchecked entities
             const firstUnfinished = activeRoute.findIndex(stop => !stop.is_delivered);
             currentProgressIndex = firstUnfinished === -1 ? totalStops : firstUnfinished;
 
             renderRouteMarkers();
             updateAppUI();
             
-            if (totalStops > 0 && currentProgressIndex < totalStops) {
+            if (totalStops > 0 && currentProgressIndex < totalStops && !isEditMode) {
                 map.setView([activeRoute[currentProgressIndex].lat, activeRoute[currentProgressIndex].lng], 16);
             }
         }
@@ -163,19 +191,53 @@
 
             activeRoute.forEach((stop, index) => {
                 const stopNumber = index + 1;
+                
+                // Determine layout class strings depending on whether edit configuration is open
+                let markerStyleClasses = `number-marker marker-stop-${stopNumber} `;
+                if (isEditMode) {
+                    markerStyleClasses += 'editable-pin';
+                } else if (stop.is_delivered) {
+                    markerStyleClasses += 'delivered';
+                }
+
                 const customIcon = L.divIcon({
-                    className: `number-marker marker-stop-${stopNumber} ${stop.is_delivered ? 'delivered' : ''}`,
+                    className: markerStyleClasses,
                     html: `<span>${stopNumber}</span>`,
                     iconSize: [30, 30], iconAnchor: [15, 15]
                 });
 
-                const marker = L.marker([stop.lat, stop.lng], { icon: customIcon }).addTo(map);
-                marker.bindPopup(`<div class="text-xs"><b>#${stopNumber}: ${stop.name}</b><br><span class="text-blue-600 font-bold">${stop.paper}</span></div>`);
+                // Read either from working local map memory array (if dragged) or from base item profile values
+                const latToUse = editedPositionsMap[stop.id] ? editedPositionsMap[stop.id].lat : stop.lat;
+                const lngToUse = editedPositionsMap[stop.id] ? editedPositionsMap[stop.id].lng : stop.lng;
+
+                const marker = L.marker([latToUse, lngToUse], { 
+                    icon: customIcon,
+                    draggable: isEditMode // Dynamic drag attribute allocation hook
+                }).addTo(map);
+
+                // --- FIXED POPUP LOGIC HERE ---
+                if (!isEditMode) {
+                    // Only bind and show popups when NOT editing
+                    marker.bindPopup(`<div class="text-xs"><b>#${stopNumber}: ${stop.name}</b><br><span class="text-blue-600 font-bold">${stop.paper}</span></div>`);
+                } else {
+                    // Make sure any open popups close immediately when entering Edit Mode
+                    marker.closePopup();
+
+                    // Update staging buffer coordinates map layout array tracking when drag operation terminates
+                    marker.on('dragend', function (event) {
+                        const newMarkerLatLng = event.target.getLatLng();
+                        editedPositionsMap[stop.id] = {
+                            lat: newMarkerLatLng.lat,
+                            lng: newMarkerLatLng.lng
+                        };
+                        console.log(`Moved Stop #${stopNumber} to local draft state:`, editedPositionsMap[stop.id]);
+                    });
+                }
+                
                 markersArray.push(marker);
             });
         }
 
-        // Live Geolocation Tracking Marker Setup
         if ("geolocation" in navigator) {
             navigator.geolocation.watchPosition((pos) => {
                 const { latitude, longitude } = pos.coords;
@@ -205,6 +267,7 @@
         });
 
         async function toggleDatabaseStopStatus(id, statusFlag) {
+            if (isEditMode) return;
             const { error } = await _supabase
                 .from('delivery_schedule')
                 .update({ is_delivered: statusFlag })
@@ -222,7 +285,6 @@
         function updateAppUI() {
             progressText.innerText = `(${activeRoute.filter(s => s.is_delivered).length} / ${totalStops} Done)`;
             
-            // Render Dropdown List Content
             listContainer.innerHTML = "";
             activeRoute.forEach((stop, index) => {
                 const stopNumber = index + 1;
@@ -242,13 +304,13 @@
                         ${stop.notes ? `<span class="text-[9px] bg-amber-500/20 text-amber-300 px-1 py-0.5 rounded truncate max-w-[60px]">Notes</span>` : ''}
                         <input type="checkbox" ${stop.is_delivered ? 'checked' : ''} 
                                onchange="toggleDatabaseStopStatus(${stop.id}, this.checked)"
+                               ${isEditMode ? 'disabled' : ''}
                                class="w-5 h-5 rounded text-blue-600 accent-blue-500 cursor-pointer">
                     </div>
                 `;
                 listContainer.appendChild(row);
             });
 
-            // Update Bottom Panel Status Displays
             if (currentProgressIndex < totalStops) {
                 const activeStop = activeRoute[currentProgressIndex];
                 progressBadge.innerText = `Stop #${currentProgressIndex + 1}`;
@@ -260,7 +322,7 @@
                     notesText.innerText = activeStop.notes;
                 } else { notesContainer.classList.add('hidden'); }
                 
-                checkbox.disabled = false;
+                checkbox.disabled = isEditMode;
             } else {
                 progressBadge.innerText = "FINISH";
                 stopTitle.innerText = totalStops > 0 ? "🎉 Shift Complete!" : "No stops added yet.";
@@ -268,6 +330,86 @@
                 notesContainer.classList.add('hidden');
                 checkbox.disabled = true;
             }
+        }
+
+        // ==========================================
+        // DRAG AND DROP SETUP INFRASTRUCTURE CONTROL
+        // ==========================================
+      function activateMarkerEditMode() {
+            isEditMode = true;
+            editedPositionsMap = {}; 
+            
+            // --- FIXED: FORCE CLOSE THE POPUP AND OVERLAY IMMEDIATELY ---
+            const adminPanel = document.getElementById('admin-panel');
+            if (adminPanel) {
+                adminPanel.classList.add('hidden');
+            }
+            
+            // --- AUTOMATICALLY SPREAD OUT CLUSTERED PINS FOR EASY DRAGGING ---
+            const centerLat = 48.7475;
+            const centerLng = 9.1025;
+            
+            activeRoute.forEach((stop, index) => {
+                // If the pins are still at the starting placeholder, spread them out slightly
+                if (stop.lat === centerLat && stop.lng === centerLng) {
+                    // Create a spiral/circle offset based on the stop number
+                    const angle = (index * 2 * Math.PI) / 16; // Distribute across angles
+                    const radius = 0.0003 * (1 + Math.floor(index / 8)); // Push outwards in rings
+                    
+                    editedPositionsMap[stop.id] = {
+                        lat: centerLat + (radius * Math.sin(angle)),
+                        lng: centerLng + (radius * Math.cos(angle))
+                    };
+                }
+            });
+            
+            document.getElementById('edit-banner').classList.remove('hidden'); 
+            renderRouteMarkers(); 
+            updateAppUI();
+        }
+        
+        function cancelEditMode() {
+            isEditMode = false;
+            editedPositionsMap = {};
+            document.getElementById('edit-banner').classList.add('hidden');
+            renderRouteMarkers();
+            updateAppUI();
+        }
+
+        async function saveDraggedPositions() {
+            const totalToUpdate = Object.keys(editedPositionsMap).length;
+            if (totalToUpdate === 0) {
+                alert("No pin locations were shifted.");
+                cancelEditMode();
+                return;
+            }
+
+            if (!confirm(`Do you want to save the new locations for these ${totalToUpdate} markers to the cloud database?`)) {
+                return;
+            }
+
+            // Loop and batch update records using promise threading arrays
+            for (const stopId in editedPositionsMap) {
+                const coordinatesBundle = editedPositionsMap[stopId];
+                
+                const { error } = await _supabase
+                    .from('delivery_schedule')
+                    .update({ 
+                        lat: coordinatesBundle.lat, 
+                        lng: coordinatesBundle.lng 
+                    })
+                    .eq('id', stopId);
+
+                if (error) {
+                    print(`Failed updating target identifier ${stopId}: `, error.message);
+                }
+            }
+
+            alert("All marker locations updated successfully on your database server!");
+            isEditMode = false;
+            editedPositionsMap = {};
+            document.getElementById('edit-banner').classList.add('hidden');
+            await fetchRouteData();
         }
 
         // Drawer Controls
@@ -279,7 +421,13 @@
             } else { tray.style.maxHeight = "0px"; txt.innerText = "Show List"; }
         }
 
-        function toggleAdminPanel() { document.getElementById('admin-panel').classList.toggle('hidden'); }
+        function toggleAdminPanel() { 
+            if(isEditMode) {
+                alert("Please finish or cancel your current location drag operations first.");
+                return;
+            }
+            document.getElementById('admin-panel').classList.toggle('hidden'); 
+        }
 
         function loadAdminDay() {
             currentDay = adminSelect.value;
@@ -310,7 +458,6 @@
             const coords = extractCoords(locInp);
             if (!coords) { alert("Invalid address link parsing."); return; }
 
-            // Get total count to append as next items sequence increment
             const { count } = await _supabase.from('delivery_schedule').select('*', { count: 'exact', head: true }).eq('day_of_week', dayToEdit);
 
             const { error } = await _supabase.from('delivery_schedule').insert([{
@@ -339,7 +486,6 @@
             }
         }
 
-        // Initialize Runtime load trigger hook execution sequence
         fetchRouteData();
     </script>
 </body>
